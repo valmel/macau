@@ -4,7 +4,7 @@ LINK.o=$(CXX) $(CXXFLAGS)
 
 INCLUDES := -I ../eigen3 -I ../libfastsparse
 LIBLOCS := -L/opt/OpenBLAS/lib -L/usr/local/lib -L/usr/lib/openblas-base
-LDFLAGS := -lm -lopenblas -lpthread
+LDFLAGS := -lm -lopenblas -llapack -lpthread
 
 all: test
 test: tests
