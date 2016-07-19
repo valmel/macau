@@ -50,7 +50,7 @@ class BPMFPrior : public ILatentPrior {
     void saveModel(std::string prefix) override;
 };
 
-/** Prior without side information (pure BPMF) */
+/** Prior with side information (Macau) */
 template<class FType>
 class MacauPrior : public ILatentPrior {
   public:
