@@ -135,6 +135,8 @@ void MacauPrior<FType>::sample_beta(const Eigen::MatrixXd &U) {
   // Ft_y is [ D x F ] matrix
   MatrixXd tmp = (U + MvNormal_prec_omp(Lambda, U.cols())).colwise() - mu;
   MatrixXd Ft_y = A_mul_B(tmp, *F) + sqrt(lambda_beta) * MvNormal_prec_omp(Lambda, num_feat);
+  double norm = MvNormal_prec_omp(Lambda, U.cols()).norm()/U.norm();
+  norm = 0.5*norm;
 
   if (use_FtF) {
     MatrixXd K(FtF.rows(), FtF.cols());
@@ -147,7 +149,7 @@ void MacauPrior<FType>::sample_beta(const Eigen::MatrixXd &U) {
     beta = Ft_y;
   } else {
     // BlockCG
-    solve_blockcg(beta, *F, lambda_beta, Ft_y, tol, 32, 8);
+    solve_blockcg(beta, *F, lambda_beta, Ft_y, norm, 32, 8);
   }
 }
 
