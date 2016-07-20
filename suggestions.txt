@@ -1,0 +1,1 @@
+1) use boost in mvnormal.cpp to generate N(0,1) using Ziggurat - quicker than Marsaglia polar method used now

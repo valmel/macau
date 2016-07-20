@@ -90,7 +90,7 @@ void bmrandn(double* x, long n) {
         x1 = unif(*bmrng);
         x2 = unif(*bmrng);
         w = x1 * x1 + x2 * x2;
-      } while ( w >= 1.0 );
+      } while ( (w >= 1.0) || (w == 0) );
 
       w = sqrt( (-2.0 * log( w ) ) / w );
       x[i] = x1 * w;
@@ -116,7 +116,7 @@ void bmrandn_single(double* x, long n) {
       x1 = unif(*bmrng);
       x2 = unif(*bmrng);
       w = x1 * x1 + x2 * x2;
-    } while ( w >= 1.0 );
+    } while ( (w >= 1.0) || (w == 0) );
 
     w = sqrt( (-2.0 * log( w ) ) / w );
     x[i] = x1 * w;
