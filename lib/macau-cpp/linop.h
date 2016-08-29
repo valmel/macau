@@ -4,6 +4,7 @@
 #include <Eigen/Dense>
 #include "chol.h"
 #include "bpmfutils.h"
+#include <iostream>
 
 extern "C" {
   #include <csr.h>
@@ -403,7 +404,6 @@ inline int solve_BCGrQ(Eigen::MatrixXd & X, T & K, double reg, Eigen::MatrixXd &
     }
   }
   Eigen::MatrixXd* RtR = new Eigen::MatrixXd(nrhs, nrhs);
-  Eigen::MatrixXd* RtR2 = new Eigen::MatrixXd(nrhs, nrhs);
 
   Eigen::MatrixXd Z(nrhs, nfeat);
   Eigen::MatrixXd Ztmp(nrhs, K.rows());
@@ -425,7 +425,11 @@ inline int solve_BCGrQ(Eigen::MatrixXd & X, T & K, double reg, Eigen::MatrixXd &
   Eigen::MatrixXd Q(nfeat, nrhs);
   Eigen::MatrixXd D(nfeat, nrhs);
   Eigen::MatrixXd C(nrhs, nrhs);
+  Eigen::MatrixXd S(nrhs, nrhs);
+  Eigen::MatrixXd Minv(nrhs, nrhs);
   Eigen::MatrixXd M(nrhs, nrhs);
+  Eigen::MatrixXd QS(nfeat, nrhs);
+  std::cout << "here 0" <<std::endl;
   Eigen::HouseholderQR<Eigen::MatrixXd> qr(B.transpose());
   //Eigen::MatrixXd thinQ(Eigen::MatrixXd::Identity(nfeat, nrhs));
   Q = qr.householderQ();
@@ -439,61 +443,45 @@ inline int solve_BCGrQ(Eigen::MatrixXd & X, T & K, double reg, Eigen::MatrixXd &
   D = Q;
   for (iter = 0; iter < 100000; iter++) {
 	// K = (F*F^t + reg*I)
-    // Z =  K*D
+    // 1.) Z =  K*D
     AtA_mul_B_switch(Z, K, reg, D, Ztmp);
-    M = D.transpose()*Z.transpose(); //a small nrhs x nrhs matrix
-    M = M.inverse();
-    X =
-
-
-
-    //A_mul_Bt_blas(PtKP, P, KP); // TODO: use KPtmp with dsyrk two save 2x time
-    A_mul_Bt_omp_sym(PtKP, P, KP);
-    Eigen::LLT<Eigen::MatrixXd> chol = PtKP.llt();
-    A = chol.solve(*RtR);
-    A.transposeInPlace();
-    ////double t3 = tick();
-
-#pragma omp parallel for schedule(dynamic, 4)
-    for (int block = 0; block < nblocks; block++) {
-      int col = block * 64;
-      int bcols = std::min(64, nfeat - col);
-      // X += A' * P
-      X.block(0, col, nrhs, bcols).noalias() += A *  P.block(0, col, nrhs, bcols);
-      // R -= A' * KP
-      R.block(0, col, nrhs, bcols).noalias() -= A * KP.block(0, col, nrhs, bcols);
-    }
-    ////double t4 = tick();
+    std::cout << "here 1" <<std::endl;
+    // 2.) Minv
+    Minv = D.transpose()*Z.transpose(); //a small nrhs x nrhs matrix
+    // instead of the above we could follow original BlockCG approach here: A_mul_Bt_omp_sym(Minv, D, Z):
+    // it computes Minv = D*Z^t, so D(Q) should be transposed first since (nrhs, nfeat) is the ordering Jaak uses
+    // so the code is:
+    // D.transposeInPlace();
+    // A_mul_Bt_omp_sym(Minv, D, Z);
+    // 3.) M = M^{-1}
+    //makeSymmetric(*Minv);
+    M = Eigen::MatrixXd::Identity(nrhs, nrhs);
+    Eigen::LLT<Eigen::MatrixXd> chol = Minv.llt();
+    chol.solveInPlace(M);
+    // 4.) update X
+    X += D*M*C;
+    // 5.) compute QS matrix (nfeat, nrhs)
+    QS = Q - Z.transpose()*M;
+    // 6.) QR decomposition of QS
+    Eigen::HouseholderQR<Eigen::MatrixXd> qr(QS.transpose());
+    //Eigen::MatrixXd thinQ(Eigen::MatrixXd::Identity(nfeat, nrhs));
+    Q = qr.householderQ();
+    //thinQ = Q * thinQ;
+    S = qr.matrixQR().template  triangularView<Eigen::Upper>();
+    // 7.) update D
+    D = Q + D*S.transpose();
+    // 8.) update C
+    C = S*C;
 
     // convergence check:
-    A_mul_At_combo(*RtR2, R);
-    makeSymmetric(*RtR2);
+    A_mul_At_combo(*RtR, R);
+    makeSymmetric(*RtR);
 
-    Eigen::VectorXd d = RtR2->diagonal();
+    Eigen::VectorXd d = RtR->diagonal();
     //std::cout << "[ iter " << iter << "] " << d.cwiseSqrt() << "\n";
     if ( (d.array() < tolsq).all()) {
       break;
     }
-    // Psi = (R R') \ R2 R2'
-    chol = RtR->llt();
-    Psi  = chol.solve(*RtR2);
-    Psi.transposeInPlace();
-    ////double t5 = tick();
-
-    // P = R + Psi' * P (P and R are already transposed)
-#pragma omp parallel for schedule(dynamic, 8)
-    for (int block = 0; block < nblocks; block++) {
-      int col = block * 64;
-      int bcols = std::min(64, nfeat - col);
-      Eigen::MatrixXd xtmp(nrhs, bcols);
-      xtmp = Psi *  P.block(0, col, nrhs, bcols);
-      P.block(0, col, nrhs, bcols) = R.block(0, col, nrhs, bcols) + xtmp;
-    }
-
-    // R R' = R2 R2'
-    std::swap(RtR, RtR2);
-    ////double t6 = tick();
-    ////printf("t2-t1 = %.3f, t3-t2 = %.3f, t4-t3 = %.3f, t5-t4 = %.3f, t6-t5 = %.3f\n", t2-t1, t3-t2, t4-t3, t5-t4, t6-t5);
   }
   // unnormalizing X:
 #pragma omp parallel for schedule(static) collapse(2)
@@ -503,7 +491,6 @@ inline int solve_BCGrQ(Eigen::MatrixXd & X, T & K, double reg, Eigen::MatrixXd &
     }
   }
   delete RtR;
-  delete RtR2;
   return iter;
 }
 

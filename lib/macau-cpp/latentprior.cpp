@@ -147,7 +147,8 @@ void MacauPrior<FType>::sample_beta(const Eigen::MatrixXd &U) {
     beta = Ft_y;
   } else {
     // BlockCG
-    solve_blockcg(beta, *F, lambda_beta, Ft_y, tol, 32, 8);
+    //solve_blockcg(beta, *F, lambda_beta, Ft_y, tol, 32, 8);
+    solve_BCGrQ(beta, *F, lambda_beta, Ft_y, tol, 32, 8);
   }
 }
 
