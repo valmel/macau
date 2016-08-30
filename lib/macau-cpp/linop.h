@@ -392,6 +392,7 @@ inline int solve_BCGrQ(Eigen::MatrixXd & X, T & K, double reg, Eigen::MatrixXd &
     inorms(rhs) = 1.0 / norms(rhs);
   }
   Eigen::MatrixXd R(nrhs, nfeat);
+  Eigen::MatrixXd Rt(nfeat, nrhs);
   Eigen::MatrixXd P(nrhs, nfeat);
   Eigen::MatrixXd Ptmp(nrhs, nfeat);
   X.setZero();
@@ -424,17 +425,17 @@ inline int solve_BCGrQ(Eigen::MatrixXd & X, T & K, double reg, Eigen::MatrixXd &
 
   Eigen::MatrixXd Q(nfeat, nrhs);
   Eigen::MatrixXd D(nfeat, nrhs);
+  Eigen::MatrixXd Dt(nrhs, nfeat);
   Eigen::MatrixXd C(nrhs, nrhs);
   Eigen::MatrixXd S(nrhs, nrhs);
   Eigen::MatrixXd Minv(nrhs, nrhs);
   Eigen::MatrixXd M(nrhs, nrhs);
-  Eigen::MatrixXd QS(nfeat, nrhs);
-  std::cout << "here 0" <<std::endl;
-  Eigen::HouseholderQR<Eigen::MatrixXd> qr(B.transpose());
-  //Eigen::MatrixXd thinQ(Eigen::MatrixXd::Identity(nfeat, nrhs));
-  Q = qr.householderQ();
-  //thinQ = Q * thinQ;
-  C = qr.matrixQR().template  triangularView<Eigen::Upper>(); //recover R - in BCGrQ called C
+  Eigen::MatrixXd thinQ(Eigen::MatrixXd::Identity(nfeat, nrhs));
+  Eigen::HouseholderQR<Eigen::MatrixXd> qr(nfeat, nrhs);
+  qr.compute(B.transpose());
+  Q = qr.householderQ()*thinQ;
+  C = thinQ.transpose()*qr.matrixQR().template  triangularView<Eigen::Upper>(); //recover R - in BCGrQ called C
+  //std::cout << "C " << C.rows() << " " << C.cols() << std::endl;
 
   // CG iteration:
   // using notation from Sebastian Birk thesis (equivalence to the original checked)
@@ -442,43 +443,38 @@ inline int solve_BCGrQ(Eigen::MatrixXd & X, T & K, double reg, Eigen::MatrixXd &
   //D^0 = Q^0
   D = Q;
   for (iter = 0; iter < 100000; iter++) {
+	Dt =  D.transpose();
 	// K = (F*F^t + reg*I)
     // 1.) Z =  K*D
-    AtA_mul_B_switch(Z, K, reg, D, Ztmp);
-    std::cout << "here 1" <<std::endl;
+    AtA_mul_B_switch(Z, K, reg, Dt, Ztmp);
     // 2.) Minv
-    Minv = D.transpose()*Z.transpose(); //a small nrhs x nrhs matrix
-    // instead of the above we could follow original BlockCG approach here: A_mul_Bt_omp_sym(Minv, D, Z):
-    // it computes Minv = D*Z^t, so D(Q) should be transposed first since (nrhs, nfeat) is the ordering Jaak uses
-    // so the code is:
-    // D.transposeInPlace();
-    // A_mul_Bt_omp_sym(Minv, D, Z);
+    //Minv = D*Z.transpose(); //a small nrhs x nrhs matrix
+    A_mul_Bt_omp_sym(Minv, Dt, Z);
     // 3.) M = M^{-1}
     //makeSymmetric(*Minv);
     M = Eigen::MatrixXd::Identity(nrhs, nrhs);
     Eigen::LLT<Eigen::MatrixXd> chol = Minv.llt();
     chol.solveInPlace(M);
     // 4.) update X
-    X += D*M*C;
+    X += (D*M*C).transpose();
     // 5.) compute QS matrix (nfeat, nrhs)
-    QS = Q - Z.transpose()*M;
-    // 6.) QR decomposition of QS
-    Eigen::HouseholderQR<Eigen::MatrixXd> qr(QS.transpose());
-    //Eigen::MatrixXd thinQ(Eigen::MatrixXd::Identity(nfeat, nrhs));
-    Q = qr.householderQ();
-    //thinQ = Q * thinQ;
-    S = qr.matrixQR().template  triangularView<Eigen::Upper>();
+    Rt = Q - Z.transpose()*M;
+    // 6.) QR decomposition of R
+    Eigen::HouseholderQR<Eigen::MatrixXd> qr(Rt);
+    Q = qr.householderQ()*thinQ;
+    S = thinQ.transpose()*qr.matrixQR().template  triangularView<Eigen::Upper>();
     // 7.) update D
     D = Q + D*S.transpose();
     // 8.) update C
     C = S*C;
 
     // convergence check:
+    R = Rt.transpose();
     A_mul_At_combo(*RtR, R);
     makeSymmetric(*RtR);
 
     Eigen::VectorXd d = RtR->diagonal();
-    //std::cout << "[ iter " << iter << "] " << d.cwiseSqrt() << "\n";
+    std::cout << "[ iter " << iter << "] " << d.cwiseSqrt() << "\n";
     if ( (d.array() < tolsq).all()) {
       break;
     }
