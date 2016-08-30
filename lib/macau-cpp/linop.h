@@ -373,9 +373,29 @@ inline int solve_BCGrQ(Eigen::MatrixXd & X, T & K, double reg, Eigen::MatrixXd &
   // B - a sample of the rhs (numOfLatents, numOfFeatures)
   // tol - tolerance of the solver
   // initialize
+
   const int nfeat = B.cols();
   const int nrhs  = B.rows();
   double tolsq = tol*tol;
+  Eigen::MatrixXd R(nrhs, nfeat);
+  Eigen::MatrixXd Rt(nfeat, nrhs);
+  Eigen::MatrixXd Ptmp(nrhs, nfeat);
+  Eigen::MatrixXd Q(nfeat, nrhs);
+  Eigen::MatrixXd Qt(nrhs, nfeat);
+  Eigen::MatrixXd D(nfeat, nrhs);
+  Eigen::MatrixXd Dt(nrhs, nfeat);
+  Eigen::MatrixXd C(nrhs, nrhs);
+  Eigen::MatrixXd S(nrhs, nrhs);
+  Eigen::MatrixXd Minv(nrhs, nrhs);
+  Eigen::MatrixXd M(nrhs, nrhs);
+  Eigen::MatrixXd thinQ(Eigen::MatrixXd::Identity(nfeat, nrhs));
+  Eigen::MatrixXd Z(nrhs, nfeat);
+  Eigen::MatrixXd Ztmp(nrhs, K.rows());
+  Eigen::MatrixXd PtKP(nrhs, nrhs);
+  //Eigen::Matrix<double, N, N> A;
+  //Eigen::Matrix<double, N, N> Psi;
+  Eigen::MatrixXd A;
+  Eigen::MatrixXd Psi;
 
   if (nfeat != K.cols()) {throw std::runtime_error("B.cols() must equal K.cols()");}
 
@@ -391,50 +411,28 @@ inline int solve_BCGrQ(Eigen::MatrixXd & X, T & K, double reg, Eigen::MatrixXd &
     norms(rhs)  = sqrt(sumsq);
     inorms(rhs) = 1.0 / norms(rhs);
   }
-  Eigen::MatrixXd R(nrhs, nfeat);
-  Eigen::MatrixXd Rt(nfeat, nrhs);
-  Eigen::MatrixXd P(nrhs, nfeat);
-  Eigen::MatrixXd Ptmp(nrhs, nfeat);
-  X.setZero();
+
   // normalize R and P:
 #pragma omp parallel for schedule(static) collapse(2)
   for (int feat = 0; feat < nfeat; feat++) {
     for (int rhs = 0; rhs < nrhs; rhs++) {
       R(rhs, feat) = B(rhs, feat) * inorms(rhs);
-      P(rhs, feat) = R(rhs, feat);
     }
   }
+
   Eigen::MatrixXd* RtR = new Eigen::MatrixXd(nrhs, nrhs);
-
-  Eigen::MatrixXd Z(nrhs, nfeat);
-  Eigen::MatrixXd Ztmp(nrhs, K.rows());
-  Eigen::MatrixXd PtKP(nrhs, nrhs);
-  //Eigen::Matrix<double, N, N> A;
-  //Eigen::Matrix<double, N, N> Psi;
-  Eigen::MatrixXd A;
-  Eigen::MatrixXd Psi;
-
   A_mul_At_combo(*RtR, R);
   makeSymmetric(*RtR);
 
-  const int nblocks = (int)ceil(nfeat / 64.0);
+  //const int nblocks = (int)ceil(nfeat / 64.0);
 
-  //QR decomposition of B
+  //QR decomposition of initial R
   //http://math.stackexchange.com/questions/1396308/qr-decomposition-results-in-eigen-library-differs-from-matlab
   //also covers the rank deficient case
-
-  Eigen::MatrixXd Q(nfeat, nrhs);
-  Eigen::MatrixXd D(nfeat, nrhs);
-  Eigen::MatrixXd Dt(nrhs, nfeat);
-  Eigen::MatrixXd C(nrhs, nrhs);
-  Eigen::MatrixXd S(nrhs, nrhs);
-  Eigen::MatrixXd Minv(nrhs, nrhs);
-  Eigen::MatrixXd M(nrhs, nrhs);
-  Eigen::MatrixXd thinQ(Eigen::MatrixXd::Identity(nfeat, nrhs));
-  Eigen::HouseholderQR<Eigen::MatrixXd> qr(nfeat, nrhs);
-  qr.compute(B.transpose());
+  Eigen::HouseholderQR<Eigen::MatrixXd> qr(R.transpose());
   Q = qr.householderQ()*thinQ;
   C = thinQ.transpose()*qr.matrixQR().template  triangularView<Eigen::Upper>(); //recover R - in BCGrQ called C
+  std::cout << "norm QR = " << (Q*C - R.transpose()).norm()/R.transpose().norm() << std::endl;
   //std::cout << "C " << C.rows() << " " << C.cols() << std::endl;
 
   // CG iteration:
@@ -442,31 +440,36 @@ inline int solve_BCGrQ(Eigen::MatrixXd & X, T & K, double reg, Eigen::MatrixXd &
   int iter = 0;
   //D^0 = Q^0
   D = Q;
+  X.setZero();
   for (iter = 0; iter < 100000; iter++) {
-	Dt =  D.transpose();
 	// K = (F*F^t + reg*I)
     // 1.) Z =  K*D
+	Dt = D.transpose();
     AtA_mul_B_switch(Z, K, reg, Dt, Ztmp);
     // 2.) Minv
-    //Minv = D*Z.transpose(); //a small nrhs x nrhs matrix
+    //Minv = Dt*Z.transpose(); //a small nrhs x nrhs matrix
     A_mul_Bt_omp_sym(Minv, Dt, Z);
     // 3.) M = M^{-1}
-    //makeSymmetric(*Minv);
-    M = Eigen::MatrixXd::Identity(nrhs, nrhs);
+    /*M = Eigen::MatrixXd::Identity(nrhs, nrhs);
     Eigen::LLT<Eigen::MatrixXd> chol = Minv.llt();
-    chol.solveInPlace(M);
+    chol.solveInPlace(M); //does not work as expected...*/
+    M = Minv.inverse();
+    //makeSymmetric(M);
+    //std::cout << M*Minv << std::endl;
     // 4.) update X
     X += (D*M*C).transpose();
     // 5.) compute QS matrix (nfeat, nrhs)
     Rt = Q - Z.transpose()*M;
     // 6.) QR decomposition of R
-    Eigen::HouseholderQR<Eigen::MatrixXd> qr(Rt);
+    qr.compute(Rt);
     Q = qr.householderQ()*thinQ;
-    S = thinQ.transpose()*qr.matrixQR().template  triangularView<Eigen::Upper>();
+    S = (thinQ.transpose())*qr.matrixQR().template  triangularView<Eigen::Upper>();
+    //std::cout << "norm QR = " << (Q*S - Rt).norm()/Rt.norm() << std::endl;
     // 7.) update D
-    D = Q + D*S.transpose();
+    D = Q + D*(S.transpose());
     // 8.) update C
     C = S*C;
+    std::cout << "norm C = " << C.norm() << std::endl;
 
     // convergence check:
     R = Rt.transpose();
@@ -474,7 +477,8 @@ inline int solve_BCGrQ(Eigen::MatrixXd & X, T & K, double reg, Eigen::MatrixXd &
     makeSymmetric(*RtR);
 
     Eigen::VectorXd d = RtR->diagonal();
-    std::cout << "[ iter " << iter << "] " << d.cwiseSqrt() << "\n";
+    //std::cout << "[ iter " << iter << "] " << d.cwiseSqrt() << "\n";
+    std::cout << "[ iter " << iter << "] " << d.sum() << "\n";
     if ( (d.array() < tolsq).all()) {
       break;
     }
