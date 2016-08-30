@@ -382,6 +382,7 @@ inline int solve_BCGrQ(Eigen::MatrixXd & X, T & K, double reg, Eigen::MatrixXd &
   Eigen::MatrixXd Ptmp(nrhs, nfeat);
   Eigen::MatrixXd Q(nfeat, nrhs);
   Eigen::MatrixXd Qt(nrhs, nfeat);
+  Eigen::MatrixXd QS(nfeat, nrhs);
   Eigen::MatrixXd D(nfeat, nrhs);
   Eigen::MatrixXd Dt(nrhs, nfeat);
   Eigen::MatrixXd C(nrhs, nrhs);
@@ -459,16 +460,17 @@ inline int solve_BCGrQ(Eigen::MatrixXd & X, T & K, double reg, Eigen::MatrixXd &
     // 4.) update X
     X += (D*M*C).transpose();
     // 5.) compute QS matrix (nfeat, nrhs)
-    Rt = Q - Z.transpose()*M;
-    // 6.) QR decomposition of R
-    qr.compute(Rt);
+    QS = Q - Z.transpose()*M;
+    // 6.) QR decomposition of RC^{k-1}
+    qr.compute(QS);
     Q = qr.householderQ()*thinQ;
     S = (thinQ.transpose())*qr.matrixQR().template  triangularView<Eigen::Upper>();
-    //std::cout << "norm QR = " << (Q*S - Rt).norm()/Rt.norm() << std::endl;
+    //std::cout << "norm QR = " << (Q*S - QS).norm()/QS.norm() << std::endl;
     // 7.) update D
     D = Q + D*(S.transpose());
     // 8.) update C
     C = S*C;
+    Rt = Q*C;
     std::cout << "norm C = " << C.norm() << std::endl;
 
     // convergence check:
